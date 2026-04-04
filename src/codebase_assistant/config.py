@@ -18,13 +18,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        # Don't fail if .env is missing — user might set env vars directly
+        # Treat empty string env vars (e.g. ANTHROPIC_API_KEY=) as unset
         env_ignore_empty=True,
     )
 
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     default_model: str = "claude-sonnet-4-6"
+    max_tokens: int = 4096
 
     # Controls how verbose the agent output is
     verbose: bool = False

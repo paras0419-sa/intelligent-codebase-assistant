@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from codebase_assistant.config import settings
 from codebase_assistant.models.base import Message
 from codebase_assistant.models.factory import create_provider
 from codebase_assistant.prompts import SYSTEM_PROMPT
@@ -94,6 +93,8 @@ def chat(
         )
     )
 
+    # TODO: messages grow unbounded — Phase 4 (memory) will add
+    # sliding window + summarization to stay within context limits.
     messages: list[Message] = []
 
     while True:

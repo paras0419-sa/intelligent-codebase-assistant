@@ -1,5 +1,13 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Literal, TypedDict
+
+Role = Literal["system", "user", "assistant"]
+
+
+class TokenUsage(TypedDict):
+    input_tokens: int
+    output_tokens: int
 
 
 @dataclass
@@ -13,7 +21,7 @@ class Message:
     your own domain types.
     """
 
-    role: str  # "system", "user", "assistant"
+    role: Role
     content: str
 
 
@@ -29,7 +37,7 @@ class ModelResponse:
 
     content: str
     model: str
-    usage: dict  # {"input_tokens": int, "output_tokens": int}
+    usage: TokenUsage
 
 
 class ModelProvider(ABC):

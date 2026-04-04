@@ -1,5 +1,6 @@
 import anthropic
 
+from codebase_assistant.config import settings
 from codebase_assistant.models.base import Message, ModelProvider, ModelResponse
 
 
@@ -35,7 +36,7 @@ class ClaudeProvider(ModelProvider):
 
         kwargs: dict = {
             "model": self._model,
-            "max_tokens": 4096,
+            "max_tokens": settings.max_tokens,
             "messages": api_messages,
         }
         if system:
@@ -54,8 +55,10 @@ class ClaudeProvider(ModelProvider):
         except anthropic.APIStatusError as e:
             raise RuntimeError(f"Anthropic API error: {e.status_code} {e.message}")
 
+        text = response.content[0].text if response.content else ""
+
         return ModelResponse(
-            content=response.content[0].text,
+            content=text,
             model=response.model,
             usage={
                 "input_tokens": response.usage.input_tokens,
