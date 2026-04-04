@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    ollama_base_url: str = "http://localhost:11434/v1"
     default_model: str = "claude-sonnet-4-6"
     max_tokens: int = 4096
 
