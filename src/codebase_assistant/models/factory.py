@@ -11,6 +11,11 @@ Why a factory instead of just instantiating providers directly?
 from codebase_assistant.config import settings
 from codebase_assistant.models.base import ModelProvider
 
+# Explicit prefixes for each provider. Prefix-matching on single letters
+# like "o" is too greedy — "ollama/llama3" would wrongly route to OpenAI.
+_ANTHROPIC_PREFIXES = ("claude", "anthropic")
+_OPENAI_PREFIXES = ("gpt", "o1", "o3", "o4")
+
 
 def create_provider(model: str | None = None) -> ModelProvider:
     """Create a ModelProvider based on the model name.
@@ -21,14 +26,14 @@ def create_provider(model: str | None = None) -> ModelProvider:
     """
     model_name = model or settings.default_model
 
-    if model_name.startswith("claude") or model_name.startswith("anthropic"):
+    if model_name.startswith(_ANTHROPIC_PREFIXES):
         return _create_claude(model_name)
-    elif model_name.startswith("gpt") or model_name.startswith("o"):
+    elif model_name.startswith(_OPENAI_PREFIXES):
         return _create_openai(model_name)
     else:
         raise ValueError(
             f"Unknown model '{model_name}'. "
-            "Supported prefixes: claude*, gpt*, o*"
+            f"Supported prefixes: {_ANTHROPIC_PREFIXES + _OPENAI_PREFIXES}"
         )
 
 
