@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     default_model: str = "claude-sonnet-4-6"
     max_tokens: int = 4096
 
+    # RAG pipeline settings
+    embedding_model: str = "nomic-embed-text"
+    embedding_base_url: str = "http://localhost:11434/v1"
+    chromadb_path: str = "~/.codebase-assistant/chromadb"
+    index_path: str = "~/.codebase-assistant/index"
+    max_chunk_lines: int = 200
+    min_chunk_lines: int = 10
+    search_top_k: int = 10
+
     # Controls how verbose the agent output is
     verbose: bool = False
 
