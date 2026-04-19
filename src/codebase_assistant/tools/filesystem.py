@@ -19,7 +19,28 @@ from codebase_assistant.tools.registry import ToolDefinition
 
 # Output caps — tuned to the 4000-char per-tool budget from the Phase 3 plan.
 READ_FILE_DEFAULT_MAX_LINES = 200
+# Review fix (#3): a 200-line read at ~80 chars/line was ~16KB, 4x over the
+# 4000-char budget documented in the Phase 3 plan. Enforce a char cap on top
+# of the line cap so a single long-lined file can't swamp the agent context.
+READ_FILE_MAX_CHARS = 4000
 LIST_DIR_MAX_ENTRIES = 200
+
+# Review fix (#2): noise directories that would otherwise dominate recursive
+# listings (and waste tokens even on flat listings of the repo root). Kept
+# small and static here; once rag/ingestion.py's gitignore logic is reusable
+# as a helper, route both through it for consistency.
+NOISE_DIR_NAMES = frozenset({
+    ".git", ".venv", "venv", "__pycache__", "node_modules",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", "dist", "build",
+})
+
+
+def _is_noise(entry: Path) -> bool:
+    """True if the entry is a hidden dotfile or a known noise directory."""
+    name = entry.name
+    if name.startswith("."):
+        return True
+    return entry.is_dir() and name in NOISE_DIR_NAMES
 
 
 READ_FILE_DESCRIPTION = (
@@ -122,6 +143,22 @@ def _read_file(repo_root: Path, args: ReadFileInput) -> str:
     shown = all_lines[start - 1 : end]
     body = _format_file_lines(shown, start)
 
+    # Review fix (#3): enforce the char cap after formatting. Trim whole lines
+    # from the tail so the output stays syntactically intact and the "showing
+    # lines N-M" header remains accurate — partial-line truncation would be
+    # misleading to the agent.
+    if len(body) > READ_FILE_MAX_CHARS:
+        trimmed_lines: list[str] = []
+        size = 0
+        for line in body.splitlines():
+            if size + len(line) + 1 > READ_FILE_MAX_CHARS:
+                break
+            trimmed_lines.append(line)
+            size += len(line) + 1
+        end = start + len(trimmed_lines) - 1
+        body = "\n".join(trimmed_lines)
+        body += f"\n... (truncated at {READ_FILE_MAX_CHARS} chars)"
+
     header = f"{args.path} (showing lines {start}-{end} of {total})"
     return f"{header}\n{body}"
 
@@ -134,42 +171,94 @@ def _tag(entry: Path) -> str:
     return "[dir] " if entry.is_dir() else "[file]"
 
 
+def _rel_display(target: Path, repo_root: Path) -> str:
+    """Render target as a repo-relative string; '.' when target == repo_root.
+
+    Review fix (#5): `Path.relative_to(...) or '.'` never fell through because
+    `PosixPath('.')` is truthy. Use an explicit stringify + equality check.
+    """
+    rel = str(target.relative_to(repo_root))
+    return "." if rel == "." else rel
+
+
 def _list_flat(target: Path, repo_root: Path) -> str:
     try:
-        children = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+        # Review fix (#2): filter hidden and noise dirs out of flat listings
+        # too — otherwise `list_directory(".")` on a dev checkout dumps .git,
+        # .venv, __pycache__, etc., alongside real project files.
+        children = sorted(
+            (c for c in target.iterdir() if not _is_noise(c)),
+            key=lambda p: (not p.is_dir(), p.name),
+        )
     except OSError as exc:
         return f"Error: could not list '{target}': {exc}"
 
     if not children:
-        return f"(empty directory: {target.relative_to(repo_root) or '.'})"
+        return f"(empty directory: {_rel_display(target, repo_root)})"
 
     lines = [f"{_tag(c)} {c.name}" for c in children]
     return "\n".join(lines)
 
 
 def _list_recursive(target: Path, repo_root: Path) -> str:
+    # Review fix (#1 + #4): walk the tree manually with an explicit stack so
+    # we (a) stop as soon as the entry cap is hit — no more materialising the
+    # whole tree via `sorted(rglob("*"))` before truncating — and (b) prune
+    # noise directories at the directory boundary so we never descend into
+    # .git / .venv / node_modules at all.
+    #
+    # target_depth is computed once (was previously recomputed per iteration).
+    target_resolved = target.resolve()
+    target_depth = len(target_resolved.relative_to(repo_root).parts)
+
     lines: list[str] = []
-    count = 0
     truncated = False
 
-    for path in sorted(target.rglob("*")):
-        # Skip anything that slipped outside via symlinks.
+    # Stack holds directories still to visit; each `iterdir()` result is
+    # sorted locally so siblings appear in a stable order without requiring
+    # a global sort of the entire tree.
+    stack: list[Path] = [target]
+
+    while stack and len(lines) < LIST_DIR_MAX_ENTRIES:
+        current = stack.pop(0)
         try:
-            rel = path.resolve().relative_to(repo_root)
-        except ValueError:
+            children = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+        except OSError:
             continue
 
-        depth = len(rel.parts) - len(target.resolve().relative_to(repo_root).parts) - 1
-        indent = "  " * max(depth, 0)
-        lines.append(f"{indent}{_tag(path)} {path.name}")
+        # Push directories in reverse so we visit them in sorted order on
+        # subsequent iterations (depth-first by directory, files emitted
+        # as we go).
+        dirs_to_visit: list[Path] = []
 
-        count += 1
-        if count >= LIST_DIR_MAX_ENTRIES:
-            truncated = True
-            break
+        for child in children:
+            if _is_noise(child):
+                continue
+
+            # Symlink guard: if `.resolve()` jumps outside the repo root,
+            # drop the entry entirely rather than listing it.
+            try:
+                rel = child.resolve().relative_to(repo_root)
+            except ValueError:
+                continue
+
+            depth = len(rel.parts) - target_depth - 1
+            indent = "  " * max(depth, 0)
+            lines.append(f"{indent}{_tag(child)} {child.name}")
+
+            if len(lines) >= LIST_DIR_MAX_ENTRIES:
+                truncated = True
+                break
+
+            if child.is_dir():
+                dirs_to_visit.append(child)
+
+        # Prepend remaining dirs so traversal stays depth-first-ish and
+        # siblings keep their order.
+        stack = dirs_to_visit + stack
 
     if not lines:
-        return f"(empty directory: {target.relative_to(repo_root) or '.'})"
+        return f"(empty directory: {_rel_display(target, repo_root)})"
 
     output = "\n".join(lines)
     if truncated:
