@@ -14,9 +14,11 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 
+from codebase_assistant.agents.base import ReactAgent
 from codebase_assistant.models.base import Message
 from codebase_assistant.models.factory import create_provider
-from codebase_assistant.prompts import SYSTEM_PROMPT
+from codebase_assistant.prompts import AGENT_SYSTEM_PROMPT, SYSTEM_PROMPT
+from codebase_assistant.tools.registry import build_default_registry
 
 app = typer.Typer(
     name="codebase-assistant",
@@ -30,13 +32,14 @@ console = Console()
 def ask(
     question: str = typer.Argument(help="Question to ask the assistant"),
     model: Optional[str] = typer.Option(
-        None, "--model", "-m", help="Model to use (e.g., claude-sonnet-4-6, gpt-4o)"
+        None, "--model", "-m", help="Model to use (e.g., qwen2.5:latest, claude-sonnet-4-6)"
     ),
+    repo_path: str = typer.Option(".", "--repo", "-r", help="Indexed repo path for code search"),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Show debug info (model, tokens)"
+        False, "--verbose", "-v", help="Show agent Thought/Action/Observation trace"
     ),
 ):
-    """Ask the codebase assistant a question."""
+    """Ask the codebase assistant a question. Uses ReAct agent with code search tools."""
     try:
         provider = create_provider(model)
     except (RuntimeError, ValueError) as e:
@@ -46,28 +49,25 @@ def ask(
     if verbose:
         console.print(f"[dim]Using: {provider.name()}[/dim]")
 
-    messages = [Message(role="user", content=question)]
+    registry = build_default_registry(Path(repo_path).resolve())
+    agent = ReactAgent(provider=provider, registry=registry, verbose=verbose)
 
     try:
         with console.status("[bold green]Thinking..."):
-            response = provider.chat(messages, system=SYSTEM_PROMPT)
+            result = agent.run(question, system_prompt=AGENT_SYSTEM_PROMPT)
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1)
 
     console.print()
-    console.print(Markdown(response.content))
+    console.print(Markdown(result.answer))
 
     if verbose:
         console.print()
         console.print(
-            Panel(
-                f"Model: {response.model}\n"
-                f"Input tokens: {response.usage['input_tokens']}\n"
-                f"Output tokens: {response.usage['output_tokens']}",
-                title="Usage",
-                border_style="dim",
-            )
+            f"[dim]Iterations: {result.iterations} | "
+            f"Tools: {', '.join(result.tool_calls) or 'none'} | "
+            f"Stopped: {result.stopped_reason}[/dim]"
         )
 
 

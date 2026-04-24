@@ -16,7 +16,14 @@ The difference from OpenAIProvider:
 from openai import OpenAI
 
 from codebase_assistant.config import settings
-from codebase_assistant.models.base import Message, ModelProvider, ModelResponse
+from codebase_assistant.models.base import (
+    Message,
+    ModelProvider,
+    ModelResponse,
+    TextBlock,
+    ToolAwareResponse,
+    ToolUseBlock,
+)
 
 
 class OllamaProvider(ModelProvider):
@@ -69,6 +76,56 @@ class OllamaProvider(ModelProvider):
                 "output_tokens": usage.completion_tokens if usage else 0,
             },
         )
+
+    def chat_with_tools(
+        self,
+        messages: list[dict],
+        system: str | None,
+        tools: list[dict],
+    ) -> ToolAwareResponse:
+        oai_messages = []
+        if system:
+            oai_messages.append({"role": "system", "content": system})
+        oai_messages.extend(messages)
+
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=oai_messages,
+                tools=tools,
+                tool_choice="auto",
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "connection" in error_msg or "refused" in error_msg:
+                raise RuntimeError(
+                    f"Cannot connect to Ollama at {self._base_url}. "
+                    "Is Ollama running? Start it with: ollama serve"
+                )
+            raise RuntimeError(f"Ollama API error: {e}")
+
+        choice = response.choices[0]
+        message = choice.message
+        finish_reason = choice.finish_reason  # "stop" | "tool_calls"
+
+        content: list[TextBlock | ToolUseBlock] = []
+
+        if message.content:
+            content.append(TextBlock(text=message.content))
+
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                import json
+                raw_args = tc.function.arguments
+                parsed = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                content.append(ToolUseBlock(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=parsed,
+                ))
+
+        stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+        return ToolAwareResponse(content=content, stop_reason=stop_reason, model=self._model)
 
     def name(self) -> str:
         return f"Ollama ({self._model})"

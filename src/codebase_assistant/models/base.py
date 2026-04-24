@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Literal, TypedDict
+from dataclasses import dataclass, field
+from typing import Any, Literal, TypedDict
 
 Role = Literal["system", "user", "assistant"]
 
@@ -40,6 +40,31 @@ class ModelResponse:
     usage: TokenUsage
 
 
+@dataclass
+class TextBlock:
+    text: str
+    type: str = "text"
+
+
+@dataclass
+class ToolUseBlock:
+    id: str
+    name: str
+    input: dict[str, Any]
+    type: str = "tool_use"
+
+
+@dataclass
+class ToolAwareResponse:
+    """Response from chat_with_tools — may contain text and/or tool call blocks."""
+    content: list[TextBlock | ToolUseBlock]
+    stop_reason: str  # "end_turn" | "tool_use"
+    model: str
+
+    def text(self) -> str:
+        return " ".join(b.text for b in self.content if isinstance(b, TextBlock))
+
+
 class ModelProvider(ABC):
     """Abstract base class for LLM providers.
 
@@ -62,6 +87,23 @@ class ModelProvider(ABC):
                     because Anthropic and OpenAI handle system prompts
                     differently (Anthropic: top-level param, OpenAI:
                     first message with role="system").
+        """
+        ...
+
+    @abstractmethod
+    def chat_with_tools(
+        self,
+        messages: list[dict],
+        system: str | None,
+        tools: list[dict],
+    ) -> ToolAwareResponse:
+        """Send messages with tool schemas; returns text and/or tool call blocks.
+
+        Args:
+            messages: Raw dicts in provider-agnostic format (role + content).
+                      Tool result messages use {"role": "tool", ...} shape.
+            system: System prompt.
+            tools: List of tool definitions in OpenAI function-calling format.
         """
         ...
 

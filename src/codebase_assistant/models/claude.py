@@ -1,7 +1,14 @@
 import anthropic
 
 from codebase_assistant.config import settings
-from codebase_assistant.models.base import Message, ModelProvider, ModelResponse
+from codebase_assistant.models.base import (
+    Message,
+    ModelProvider,
+    ModelResponse,
+    TextBlock,
+    ToolAwareResponse,
+    ToolUseBlock,
+)
 
 
 class ClaudeProvider(ModelProvider):
@@ -65,6 +72,50 @@ class ClaudeProvider(ModelProvider):
                 "output_tokens": response.usage.output_tokens,
             },
         )
+
+    def chat_with_tools(
+        self,
+        messages: list[dict],
+        system: str | None,
+        tools: list[dict],
+    ) -> ToolAwareResponse:
+        # Convert OpenAI-format tools to Anthropic format
+        anthropic_tools = [
+            {
+                "name": t["function"]["name"],
+                "description": t["function"].get("description", ""),
+                "input_schema": t["function"].get("parameters", {}),
+            }
+            for t in tools
+        ]
+
+        kwargs: dict = {
+            "model": self._model,
+            "max_tokens": settings.max_tokens,
+            "messages": messages,
+            "tools": anthropic_tools,
+        }
+        if system:
+            kwargs["system"] = system
+
+        try:
+            response = self._client.messages.create(**kwargs)
+        except anthropic.AuthenticationError:
+            raise RuntimeError("Anthropic API key is invalid.")
+        except anthropic.RateLimitError:
+            raise RuntimeError("Anthropic rate limit hit.")
+        except anthropic.APIStatusError as e:
+            raise RuntimeError(f"Anthropic API error: {e.status_code} {e.message}")
+
+        content: list[TextBlock | ToolUseBlock] = []
+        for block in response.content:
+            if block.type == "text":
+                content.append(TextBlock(text=block.text))
+            elif block.type == "tool_use":
+                content.append(ToolUseBlock(id=block.id, name=block.name, input=block.input))
+
+        stop_reason = "tool_use" if response.stop_reason == "tool_use" else "end_turn"
+        return ToolAwareResponse(content=content, stop_reason=stop_reason, model=response.model)
 
     def name(self) -> str:
         return f"Claude ({self._model})"
