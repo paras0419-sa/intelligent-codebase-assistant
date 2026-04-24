@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
     ollama_base_url: str = "http://localhost:11434/v1"
-    default_model: str = "claude-sonnet-4-6"
+    default_model: str = "qwen2.5:latest"
     max_tokens: int = 4096
 
     # RAG pipeline settings
